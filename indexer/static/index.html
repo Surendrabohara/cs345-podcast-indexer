@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Podcast &amp; Interview Indexer</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; color: #1b1b1b; }
+    h1 { font-size: 1.4rem; }
+    section { border: 1px solid #d8d8d8; border-radius: 8px; padding: 1rem; margin-bottom: 1.2rem; }
+    input, button { font: inherit; padding: .45rem .6rem; margin: .2rem .2rem .2rem 0; }
+    .hit { border-top: 1px solid #eee; padding: .7rem 0; }
+    .meta { color: #666; font-size: .85rem; }
+    .time { font-weight: 600; }
+    .tag { display: inline-block; background: #eef2ff; border-radius: 4px; padding: 0 .4rem; margin-right: .3rem; font-size: .8rem; }
+    #status { color: #555; }
+  </style>
+</head>
+<body>
+  <h1>Podcast &amp; Interview Indexer</h1>
+
+  <section>
+    <strong>1. Add a recording</strong><br>
+    <input type="file" id="audio" accept="audio/*">
+    <input type="text" id="title" placeholder="Title (optional)">
+    <button id="upload">Upload</button>
+    <div id="status"></div>
+  </section>
+
+  <section>
+    <strong>2. Search</strong><br>
+    <input type="text" id="q" placeholder="Topic or name">
+    <input type="text" id="person" placeholder="Person filter">
+    <input type="text" id="topic" placeholder="Topic filter">
+    <button id="go">Search</button>
+    <div id="summary" class="meta"></div>
+    <div id="results"></div>
+  </section>
+
+  <section>
+    <strong>Episodes</strong>
+    <div id="episodes" class="meta"></div>
+  </section>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const mmss = (s) => String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(Math.floor(s % 60)).padStart(2, "0");
+
+async function loadEpisodes() {
+  const eps = await (await fetch("/episodes")).json();
+  $("episodes").textContent = eps.length
+    ? eps.map(e => `${e.title} (${mmss(e.duration_seconds)}, ${e.segments} segments)`).join(" | ")
+    : "None yet.";
+}
+
+$("upload").onclick = async () => {
+  const file = $("audio").files[0];
+  if (!file) { $("status").textContent = "Choose an audio file first."; return; }
+  const form = new FormData();
+  form.append("audio", file);
+  form.append("title", $("title").value);
+  $("status").textContent = "Working. This takes about as long as the recording...";
+  const res = await fetch("/process", { method: "POST", body: form });
+  const body = await res.json();
+  $("status").textContent = res.ok ? `Done: ${body.title} (${body.segments} segments)` : `Error: ${body.error}`;
+  loadEpisodes();
+};
+
+$("go").onclick = async () => {
+  const params = new URLSearchParams({ q: $("q").value });
+  if ($("person").value) params.set("person", $("person").value);
+  if ($("topic").value) params.set("topic", $("topic").value);
+  const data = await (await fetch("/search?" + params)).json();
+  $("summary").textContent = `${data.results.length} result(s) in ${data.latency_ms} ms`;
+  const box = $("results");
+  box.textContent = "";
+  for (const h of data.results) {
+    const div = document.createElement("div");
+    div.className = "hit";
+    const head = document.createElement("div");
+    const t = document.createElement("span");
+    t.className = "time";
+    t.textContent = mmss(h.start_sec);
+    head.append(t, " in ", h.episode_title);
+    const body = document.createElement("div");
+    body.textContent = h.text;
+    const tags = document.createElement("div");
+    tags.className = "meta";
+    for (const p of h.people) { const s = document.createElement("span"); s.className = "tag"; s.textContent = p; tags.append(s); }
+    for (const x of h.topics) { const s = document.createElement("span"); s.className = "tag"; s.textContent = x; tags.append(s); }
+    div.append(head, body, tags);
+    box.append(div);
+  }
+};
+
+loadEpisodes();
+</script>
+</body>
+</html>
