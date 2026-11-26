@@ -5,11 +5,13 @@ from pathlib import Path
 from flask import Flask, jsonify, request, send_from_directory
 
 from .analyze import analyze_text
-from .audio import UnsupportedAudioError
+from .audio import NoSpeechError, UnsupportedAudioError
 from .config import ALLOWED_EXTENSIONS, MAX_UPLOAD_BYTES
 from .pipeline import process_audio, transcribe_only
 from .search import search_segments
 from .store import list_episodes, load_episode
+from .telemetry import record_search_latency, telemetry_summary
+from .tts import DEFAULT_VOICE, VOICES
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
@@ -18,6 +20,11 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
 @app.errorhandler(413)
 def too_large(_err):
     return jsonify(error="File is too large. The limit is 25 MB."), 413
+
+
+@app.errorhandler(NoSpeechError)
+def no_speech(err):
+    return jsonify(error=str(err)), 422
 
 
 @app.errorhandler(UnsupportedAudioError)
@@ -48,7 +55,7 @@ def _with_uploaded_audio(handler):
         file.save(src)
         try:
             return handler(src, name)
-        except UnsupportedAudioError:
+        except (UnsupportedAudioError, NoSpeechError):
             raise
         except RuntimeError as err:
             return jsonify(error=str(err)), 500
@@ -76,9 +83,10 @@ def analyze():
 def process():
     title = (request.form.get("title") or "").strip()
     language = request.form.get("language", "en-US")
+    voice = request.form.get("voice", DEFAULT_VOICE)
 
     def run(src, name):
-        episode = process_audio(src, title or Path(name).stem, language)
+        episode = process_audio(src, title or Path(name).stem, language, voice)
         return jsonify(episode), 201
 
     return _with_uploaded_audio(run)
@@ -99,15 +107,27 @@ def episode_detail(episode_id):
 
 @app.get("/search")
 def search():
-    return jsonify(
-        search_segments(
-            list_episodes(),
-            q=request.args.get("q", ""),
-            person=request.args.get("person"),
-            topic=request.args.get("topic"),
-            episode=request.args.get("episode"),
-        )
+    person = request.args.get("person")
+    topic = request.args.get("topic")
+    out = search_segments(
+        list_episodes(),
+        q=request.args.get("q", ""),
+        person=person,
+        topic=topic,
+        episode=request.args.get("episode"),
     )
+    record_search_latency(out["latency_ms"], "filtered" if (person or topic) else "text")
+    return jsonify(out)
+
+
+@app.get("/voices")
+def voices():
+    return jsonify([{"voice": v, "style": style} for v, style in VOICES.items()])
+
+
+@app.get("/telemetry-summary")
+def telemetry_summary_route():
+    return jsonify(telemetry_summary())
 
 
 def _summary(ep: dict) -> dict:

@@ -5,3 +5,6 @@ requests>=2.31
 azure-cognitiveservices-speech>=1.38
 azure-ai-textanalytics>=5.3
 pytest>=8.0
+azure-monitor-opentelemetry>=1.6
+opentelemetry-api
+opentelemetry-sdk

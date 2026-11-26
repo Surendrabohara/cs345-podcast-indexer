@@ -42,6 +42,8 @@ def fakes(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline, "convert_to_wav", fake_convert)
     monkeypatch.setattr(pipeline, "transcribe_file", fake_transcribe)
     monkeypatch.setattr(pipeline, "analyze_segments", fake_analyze)
+    monkeypatch.setattr(pipeline, "synthesize", lambda text, voice="x": {
+        "audio_base64": "AAAA", "audio_format": "mp3", "voice": voice, "char_count": len(text)})
     monkeypatch.setattr(pipeline, "save_episode", lambda ep: store.save_episode(ep, tmp_path / "eps"))
     monkeypatch.setattr(main, "list_episodes", lambda: store.list_episodes(tmp_path / "eps"))
     monkeypatch.setattr(main, "load_episode", lambda i: store.load_episode(i, tmp_path / "eps"))
@@ -83,8 +85,10 @@ def test_process_episodes_and_search(fakes):
     res = upload(client)
     assert res.status_code == 201
     body = res.get_json()
-    for key in ("transcript", "language", "duration_seconds", "confidence", "sentiment", "segments"):
+    for key in ("transcript", "language", "duration_seconds", "confidence", "sentiment", "segments",
+                "summary_text", "audio_base64"):
         assert key in body
+    assert "audio_base64" not in store.load_episode(body["id"], fakes / "eps")  # audio is never stored
 
     assert len(client.get("/episodes").get_json()) == 1
     assert client.get(f"/episodes/{body['id']}").status_code == 200
@@ -135,3 +139,28 @@ def test_file_over_25mb_is_413(fakes, monkeypatch):
         content_type="multipart/form-data",
     )
     assert big.status_code == 413
+
+
+def test_telemetry_summary_and_voices(fakes):
+    client = main.app.test_client()
+    from indexer import telemetry
+    telemetry.session_log.clear()
+    assert client.get("/telemetry-summary").get_json() == {"message": "No calls yet"}
+    upload(client)
+    summary = client.get("/telemetry-summary").get_json()
+    assert summary["total_calls"] == 1 and "avg_confidence" in summary
+    assert len(client.get("/voices").get_json()) >= 3
+
+
+def test_build_summary_mentions_topics_sentiment_and_entities():
+    from indexer.tts import build_summary
+    text = build_summary("Glacier basics", ["glacier melt", "water supply"], "neutral",
+                         [{"category": "Person", "text": "Maya"}])
+    assert "2 key topics" in text and "neutral" in text and "1 person" in text
+
+
+def test_silent_recording_is_422_with_a_clear_message(fakes, monkeypatch):
+    monkeypatch.setattr(pipeline, "transcribe_file", lambda wav, language="en-US": [])
+    res = upload(main.app.test_client())
+    assert res.status_code == 422
+    assert "No speech" in res.get_json()["error"]

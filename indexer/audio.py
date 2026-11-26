@@ -5,6 +5,10 @@ import wave
 from pathlib import Path
 
 
+class NoSpeechError(RuntimeError):
+    """The audio was readable but no speech was recognized."""
+
+
 class UnsupportedAudioError(RuntimeError):
     """The file is not audio we can read. The API turns this into HTTP 415."""
 

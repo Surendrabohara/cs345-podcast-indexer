@@ -22,9 +22,17 @@
   <section>
     <strong>1. Add a recording</strong><br>
     <input type="file" id="audio" accept="audio/*">
+    <button id="rec">Record</button> <span id="recnote" class="meta"></span><br>
     <input type="text" id="title" placeholder="Title (optional)">
-    <button id="upload">Upload</button>
+    <select id="voice"></select>
+    <button id="upload">Submit</button>
     <div id="status"></div>
+    <div id="out" style="display:none">
+      <audio id="player" controls></audio>
+      <div id="spoken" class="meta"></div>
+      <p id="transcript"></p>
+      <div id="tags"></div>
+    </div>
   </section>
 
   <section>
@@ -53,16 +61,72 @@ async function loadEpisodes() {
     : "None yet.";
 }
 
+let recorder = null, chunks = [], recorded = null;
+$("rec").onclick = async () => {
+  if (recorder && recorder.state === "recording") { recorder.stop(); return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    recorder = new MediaRecorder(stream);
+    chunks = [];
+    recorder.ondataavailable = (e) => chunks.push(e.data);
+    recorder.onstop = () => {
+      stream.getTracks().forEach(t => t.stop());
+      recorded = new File([new Blob(chunks, { type: recorder.mimeType })], "recording.webm");
+      $("rec").textContent = "Record";
+      $("recnote").textContent = "Recorded. Press Submit.";
+    };
+    recorder.start();
+    $("rec").textContent = "Stop";
+    $("recnote").textContent = "Recording...";
+  } catch (err) {
+    $("recnote").textContent = "Microphone not available (needs HTTPS or localhost).";
+  }
+};
+
+(async () => {
+  const voices = await (await fetch("/voices")).json();
+  for (const v of voices) {
+    const o = document.createElement("option");
+    o.value = v.voice;
+    o.textContent = `${v.style} (${v.voice.replace("en-US-", "").replace("Neural", "")})`;
+    $("voice").append(o);
+  }
+})();
+
 $("upload").onclick = async () => {
-  const file = $("audio").files[0];
-  if (!file) { $("status").textContent = "Choose an audio file first."; return; }
+  const file = recorded || $("audio").files[0];
+  if (!file) { $("status").textContent = "Record or choose an audio file first."; return; }
   const form = new FormData();
   form.append("audio", file);
   form.append("title", $("title").value);
+  form.append("voice", $("voice").value);
   $("status").textContent = "Working. This takes about as long as the recording...";
-  const res = await fetch("/process", { method: "POST", body: form });
-  const body = await res.json();
-  $("status").textContent = res.ok ? `Done: ${body.title} (${body.segments} segments)` : `Error: ${body.error}`;
+  let res, body;
+  try {
+    res = await fetch("/process", { method: "POST", body: form });
+    body = await res.json();
+  } catch (err) {
+    $("status").textContent = "Error: the server could not process this recording. Try again.";
+    return;
+  }
+  if (!res.ok) { $("status").textContent = `Error: ${body.error || res.status}`; $("out").style.display = "none"; return; }
+  $("status").textContent = `Done: ${body.title}, sentiment ${body.sentiment.label}, ${body.entity_count} entities`;
+  $("out").style.display = "block";
+  $("player").src = "data:audio/mpeg;base64," + body.audio_base64;
+  $("spoken").textContent = body.summary_text;
+  $("transcript").textContent = body.transcript;
+  const tags = $("tags");
+  tags.textContent = "";
+  const seen = new Set();
+  for (const seg of body.segments) for (const e of seg.entities) {
+    const key = e.category + e.text;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const s = document.createElement("span");
+    s.className = "tag";
+    s.textContent = `${e.text} (${e.category})`;
+    tags.append(s);
+  }
   loadEpisodes();
 };
 

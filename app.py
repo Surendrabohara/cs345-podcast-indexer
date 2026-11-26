@@ -1,11 +1,18 @@
 """Entry point. Azure App Service (Flask) looks for app.py and a variable called `app`.
 
-Part G note: call init_telemetry() from telemetry.py FIRST in this file, before the
-imports below, so Application Insights can instrument Flask and the Azure SDKs.
+Application Insights must start FIRST, before Flask or any Azure SDK is imported (handout G2).
 """
 import os
 
-from indexer.main import app  # noqa: E402
+from dotenv import load_dotenv
+
+load_dotenv()  # load .env before everything else
+
+from indexer.telemetry import init_telemetry  # noqa: E402
+
+init_telemetry()
+
+from indexer.main import app  # noqa: E402,F401
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
